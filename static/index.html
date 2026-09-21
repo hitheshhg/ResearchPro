@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP32 Acoustic Direction of Arrival (DoA) TinyML Platform</title>
+  <meta name="description" content="Real-Time Acoustic Direction of Arrival Estimation on ESP32 Microcontrollers Using Dual MAX9814 Sensors and Quantized TinyML" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div id="app-container">
+    <!-- TOP NAVIGATION & HEADER -->
+    <header id="main-header" class="glass-panel">
+      <div class="header-branding">
+        <div class="header-icon-badge">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
+            <line x1="8" y1="22" x2="16" y2="22"></line>
+          </svg>
+        </div>
+        <div class="header-titles">
+          <h1>Acoustic Direction of Arrival (DoA) TinyML System</h1>
+          <p class="subtitle">Dual MAX9814 Analog Microphones • 31-Point Normalized Cross-Correlation • Quantized int8 MLP • ESP32 Xtensa LX6</p>
+        </div>
+      </div>
+
+      <div class="header-badges">
+        <div class="stat-pill" id="badge-model">
+          <span class="pill-dot green"></span>
+          <span class="pill-label">Model:</span>
+          <span class="pill-val">int8 TFLite (2.89 KB)</span>
+        </div>
+        <div class="stat-pill" id="badge-accuracy">
+          <span class="pill-label">Accuracy:</span>
+          <span class="pill-val highlight">97.33%</span>
+        </div>
+        <div class="stat-pill" id="badge-latency">
+          <span class="pill-label">DSP Latency:</span>
+          <span class="pill-val cyan">4.83 μs</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-run-benchmark" class="btn btn-secondary" title="Execute native C++ DSP benchmark">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          Run DSP Benchmark
+        </button>
+        <a id="btn-download-pdf" href="/api/download/pdf" target="_blank" class="btn btn-primary" title="Download formal IEEE Project Report PDF">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          IEEE Report PDF
+        </a>
+        <a id="btn-download-pptx" href="/api/download/presentation" class="btn btn-secondary" title="Download 16:9 Presentation">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          Slides (.pptx)
+        </a>
+      </div>
+    </header>
+
+    <!-- DASHBOARD MAIN GRID -->
+    <main id="main-dashboard">
+      <!-- LEFT COLUMN: ACOUSTIC ROOM SIMULATION & CONTROLS -->
+      <section class="dashboard-col col-simulation">
+        <!-- Room Canvas Card -->
+        <div class="card glass-panel" id="card-room">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>
+              <h3>2D Reverberant Acoustic Field (5m × 5m)</h3>
+            </div>
+            <span class="card-tag">Interactive Drag / Click</span>
+          </div>
+
+          <div class="canvas-container">
+            <canvas id="canvas-room" width="460" height="340"></canvas>
+            <div class="canvas-overlay-badges">
+              <div class="badge-mini" id="badge-cur-angle">Angle: <strong id="lbl-readout-angle">0.0°</strong></div>
+              <div class="badge-mini" id="badge-cur-dist">Dist: <strong id="lbl-readout-dist">1.50 m</strong></div>
+              <div class="badge-mini" id="badge-cur-tdoa">TDoA: <strong id="lbl-readout-tdoa">0.0 μs</strong></div>
+            </div>
+          </div>
+
+          <!-- Sector Quick Presets -->
+          <div class="preset-buttons-row">
+            <button class="preset-btn btn-sector-left" id="btn-preset-left" data-angle="-45">
+              <span class="dot red"></span> LEFT (-45°)
+            </button>
+            <button class="preset-btn btn-sector-center active" id="btn-preset-center" data-angle="0">
+              <span class="dot green"></span> CENTER (0°)
+            </button>
+            <button class="preset-btn btn-sector-right" id="btn-preset-right" data-angle="45">
+              <span class="dot blue"></span> RIGHT (+45°)
+            </button>
+            <button class="preset-btn" id="btn-preset-random">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+              Random
+            </button>
+          </div>
+        </div>
+
+        <!-- Simulation Physics Control Parameters -->
+        <div class="card glass-panel" id="card-controls">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+              <h3>Acoustic Signal & Environment</h3>
+            </div>
+          </div>
+
+          <div class="controls-grid">
+            <div class="control-group">
+              <div class="control-label-row">
+                <label for="slider-angle">Incidence Angle (&theta;):</label>
+                <span class="value-bubble" id="val-angle">0°</span>
+              </div>
+              <input type="range" id="slider-angle" min="-90" max="90" step="1" value="0" />
+            </div>
+
+            <div class="control-group">
+              <div class="control-label-row">
+                <label for="slider-distance">Source Distance (r):</label>
+                <span class="value-bubble" id="val-dist">1.50 m</span>
+              </div>
+              <input type="range" id="slider-distance" min="0.5" max="3.0" step="0.05" value="1.5" />
+            </div>
+
+            <div class="control-row-two-col">
+              <div class="control-group">
+                <label for="select-transient">Transient Signature:</label>
+                <select id="select-transient" class="custom-select">
+                  <option value="snap">Finger Snap (2.5 kHz)</option>
+                  <option value="clap">Hand Clap (Multi-burst)</option>
+                  <option value="chirp">Acoustic Chirp (1-4 kHz)</option>
+                  <option value="burst">High-Frequency Burst</option>
+                </select>
+              </div>
+
+              <div class="control-group">
+                <div class="control-label-row">
+                  <label for="slider-snr">SNR (dB):</label>
+                  <span class="value-bubble" id="val-snr">25 dB</span>
+                </div>
+                <input type="range" id="slider-snr" min="10" max="40" step="1" value="25" />
+              </div>
+            </div>
+
+            <div class="control-row-two-col">
+              <div class="control-group">
+                <div class="control-label-row">
+                  <label for="slider-rt60">Reverb Time (T60):</label>
+                  <span class="value-bubble" id="val-rt60">0.20 s</span>
+                </div>
+                <input type="range" id="slider-rt60" min="0.05" max="0.50" step="0.01" value="0.20" />
+              </div>
+
+              <div class="control-group switch-group">
+                <label for="chk-audio">Stereo Sound Playback:</label>
+                <label class="switch">
+                  <input type="checkbox" id="chk-audio" checked />
+                  <span class="slider round"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="action-buttons-row">
+              <button id="btn-fire-pulse" class="btn btn-pulse">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Emit Acoustic Pulse
+              </button>
+              <button id="btn-auto-stream" class="btn btn-secondary">
+                <span class="pulsing-record-dot"></span>
+                Auto Continuous Stream
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CENTER COLUMN: TINYML INFERENCE & REAL-TIME DSP SIGNALS -->
+      <section class="dashboard-col col-signals">
+        <!-- TinyML Classification Card -->
+        <div class="card glass-panel" id="card-inference">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+              <h3>Quantized int8 TinyML Inference Result</h3>
+            </div>
+            <span class="badge-chip model-chip">Input(31) &rarr; Dense(16) &rarr; Dense(3)</span>
+          </div>
+
+          <div class="inference-hero">
+            <!-- Sector Compass Indicator -->
+            <div class="compass-wrapper">
+              <div class="compass-dial" id="compass-dial">
+                <div class="compass-sector sector-left" title="LEFT Sector: -55° to -35°">L</div>
+                <div class="compass-sector sector-center" title="CENTER Sector: -10° to +10°">C</div>
+                <div class="compass-sector sector-right" title="RIGHT Sector: +35° to +55°">R</div>
+                <div class="compass-needle" id="compass-needle"></div>
+              </div>
+            </div>
+
+            <!-- Big Sector Text Callout -->
+            <div class="sector-callout">
+              <div class="callout-label">PREDICTED ARRIVAL SECTOR:</div>
+              <div class="callout-value sector-center-glow" id="predicted-sector-text">CENTER (0°)</div>
+              <div class="callout-sub">
+                Confidence: <span class="confidence-val" id="predicted-confidence-text">99.2%</span>
+                <span class="separator">•</span>
+                Peak Lag: <span class="lag-val" id="predicted-lag-text">&tau; = 0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Probability Distribution Bars -->
+          <div class="probability-distribution">
+            <div class="prob-row">
+              <div class="prob-meta">
+                <span class="prob-class-name">LEFT (-45°)</span>
+                <span class="prob-pct" id="prob-left-text">0.4%</span>
+              </div>
+              <div class="prob-bar-track">
+                <div class="prob-bar-fill fill-left" id="prob-bar-left" style="width: 0.4%"></div>
+              </div>
+            </div>
+
+            <div class="prob-row">
+              <div class="prob-meta">
+                <span class="prob-class-name">CENTER (0°)</span>
+                <span class="prob-pct" id="prob-center-text">99.2%</span>
+              </div>
+              <div class="prob-bar-track">
+                <div class="prob-bar-fill fill-center" id="prob-bar-center" style="width: 99.2%"></div>
+              </div>
+            </div>
+
+            <div class="prob-row">
+              <div class="prob-meta">
+                <span class="prob-class-name">RIGHT (+45°)</span>
+                <span class="prob-pct" id="prob-right-text">0.4%</span>
+              </div>
+              <div class="prob-bar-track">
+                <div class="prob-bar-fill fill-right" id="prob-bar-right" style="width: 0.4%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dual Oscilloscope (Raw ADC Acquisition) -->
+        <div class="card glass-panel" id="card-oscilloscope">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              <h3>Dual MAX9814 Waveforms (16 kHz, 256 Samples / 16 ms)</h3>
+            </div>
+            <div class="channel-legends">
+              <span class="legend-chip ch-left"><span class="legend-color cyan"></span> Mic L (CH34)</span>
+              <span class="legend-chip ch-right"><span class="legend-color magenta"></span> Mic R (CH35)</span>
+            </div>
+          </div>
+          <div class="canvas-container osc-container">
+            <canvas id="canvas-oscilloscope" width="560" height="160"></canvas>
+          </div>
+        </div>
+
+        <!-- DSP Normalized Cross-Correlation Spectrum -->
+        <div class="card glass-panel" id="card-ncc">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg>
+              <h3>31-Point Normalized Cross-Correlation Vector (Lags [-15, +15])</h3>
+            </div>
+            <div class="ncc-peak-badge" id="ncc-peak-badge">
+              Peak Lag &tau;: <strong id="val-peak-lag">0</strong> (NCC: <strong id="val-peak-ncc">1.000</strong>)
+            </div>
+          </div>
+          <div class="canvas-container ncc-container">
+            <canvas id="canvas-ncc" width="560" height="160"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: HARDWARE PROFILER, TERMINAL & RESEARCH ASSETS -->
+      <section class="dashboard-col col-metrics">
+        <!-- Hardware Profiling Waterfall -->
+        <div class="card glass-panel" id="card-profiler">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              <h3>ESP32 Hardware Execution Profiling</h3>
+            </div>
+            <span class="badge-chip hardware-chip">Tensilica LX6 @ 240MHz</span>
+          </div>
+
+          <div class="profiler-stats-grid">
+            <div class="profiler-stat-card">
+              <div class="p-val" id="prof-total-lat">16.08 ms</div>
+              <div class="p-lbl">Total Frame Latency</div>
+            </div>
+            <div class="profiler-stat-card">
+              <div class="p-val highlight-green" id="prof-dsp-lat">4.83 μs</div>
+              <div class="p-lbl">31-pt NCC DSP Execution</div>
+            </div>
+            <div class="profiler-stat-card">
+              <div class="p-val highlight-blue" id="prof-tflm-lat">72.0 μs</div>
+              <div class="p-lbl">TFLM int8 MLP Inference</div>
+            </div>
+            <div class="profiler-stat-card">
+              <div class="p-val highlight-cyan" id="prof-throughput">206.8 k</div>
+              <div class="p-lbl">DSP Feats/sec Throughput</div>
+            </div>
+          </div>
+
+          <div class="memory-footprint-bars">
+            <div class="mem-item">
+              <div class="mem-header">
+                <span>SRAM Usage (Static Allocation)</span>
+                <span class="mem-figures"><strong>2.83 KB</strong> / 520 KB (0.54%)</span>
+              </div>
+              <div class="mem-bar"><div class="mem-fill green" style="width: 5%"></div></div>
+            </div>
+            <div class="mem-item">
+              <div class="mem-header">
+                <span>Flash Program Storage (int8 Model)</span>
+                <span class="mem-figures"><strong>2.89 KB</strong> / 4,096 KB (&lt;0.1%)</span>
+              </div>
+              <div class="mem-bar"><div class="mem-fill blue" style="width: 3%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live C++ DSP Benchmark Console Output -->
+        <div class="card glass-panel" id="card-terminal">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+              <h3>Native C++ DSP Benchmark Console</h3>
+            </div>
+            <button id="btn-re-run-dsp" class="btn btn-sm btn-ghost">Execute test_dsp</button>
+          </div>
+          <div class="terminal-body" id="terminal-body">
+            <div class="term-line success">&gt; ESP32 DSP Subsystem Ready.</div>
+            <div class="term-line info">&gt; Executing 31-Point Normalized Cross-Correlation harness...</div>
+            <div class="term-line">&gt; [Test 1: CENTER] Injected Delay = 0 samples -&gt; Peak Lag = 0 (NCC = 1.0) -&gt; PASSED [OK]</div>
+            <div class="term-line">&gt; [Test 2: RIGHT ] Injected Delay = +3 samples -&gt; Peak Lag = 3 (NCC = 0.998) -&gt; PASSED [OK]</div>
+            <div class="term-line">&gt; [Test 3: LEFT  ] Injected Delay = -3 samples -&gt; Peak Lag = -3 (NCC = 0.983) -&gt; PASSED [OK]</div>
+            <div class="term-line highlight">&gt; Mean DSP Latency: 4.83 &mu;s | Throughput: 206,833 inferences/sec</div>
+          </div>
+        </div>
+
+        <!-- Research Assets & Publication Gallery Modal Trigger -->
+        <div class="card glass-panel" id="card-gallery">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+              <h3>Publication Figure Gallery (IEEE Report)</h3>
+            </div>
+          </div>
+          <div class="figure-thumbnails-grid">
+            <div class="thumb-card" data-fig="fig1_system_architecture.png" data-title="Figure 1: End-to-End System Architecture">
+              <img src="/report_assets/fig1_system_architecture.png" alt="Architecture" />
+              <span>Fig 1: Architecture</span>
+            </div>
+            <div class="thumb-card" data-fig="fig2_tdoa_geometry.png" data-title="Figure 2: Acoustic TDoA Geometry">
+              <img src="/report_assets/fig2_tdoa_geometry.png" alt="TDoA Geometry" />
+              <span>Fig 2: TDoA Geometry</span>
+            </div>
+            <div class="thumb-card" data-fig="fig3_dsp_flowchart.png" data-title="Figure 3: DSP Pipeline Flowchart">
+              <img src="/report_assets/fig3_dsp_flowchart.png" alt="DSP Pipeline" />
+              <span>Fig 3: DSP Pipeline</span>
+            </div>
+            <div class="thumb-card" data-fig="fig4_confusion_matrix_and_metrics.png" data-title="Figure 4: Confusion Matrix & Metrics (97.33% Accuracy)">
+              <img src="/report_assets/fig4_confusion_matrix_and_metrics.png" alt="Confusion Matrix" />
+              <span>Fig 4: Metrics</span>
+            </div>
+            <div class="thumb-card" data-fig="fig5_hardware_profiling_benchmark.png" data-title="Figure 5: ESP32 Hardware Profiling & Latency">
+              <img src="/report_assets/fig5_hardware_profiling_benchmark.png" alt="Hardware Profiling" />
+              <span>Fig 5: Hardware Profile</span>
+            </div>
+            <div class="thumb-card" data-fig="fig6_ncc_spatial_curves.png" data-title="Figure 6: Spatial NCC Feature Curves">
+              <img src="/report_assets/fig6_ncc_spatial_curves.png" alt="NCC Spatial Curves" />
+              <span>Fig 6: Spatial Curves</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- FIGURE LIGHTBOX MODAL -->
+    <div id="lightbox-modal" class="modal">
+      <div class="modal-content glass-panel">
+        <div class="modal-header">
+          <h4 id="modal-title">Figure Preview</h4>
+          <button id="modal-close-btn" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <img id="modal-img" src="" alt="Figure Full Preview" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
