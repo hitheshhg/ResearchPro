@@ -6,13 +6,13 @@
 
 :root {
   --bg-deep: #040507;
-  --bg-surface: rgba(10, 14, 22, 0.65);
-  --bg-surface-hover: rgba(18, 24, 38, 0.85);
+  --bg-surface: rgba(10, 14, 22, 0.68);
+  --bg-surface-hover: rgba(18, 24, 38, 0.88);
   --bg-active: rgba(255, 255, 255, 0.12);
 
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-highlight: rgba(255, 255, 255, 0.18);
-  --border-active-cyan: rgba(0, 240, 255, 0.55);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-highlight: rgba(255, 255, 255, 0.2);
+  --border-active-cyan: rgba(0, 240, 255, 0.6);
 
   --text-pure: #FFFFFF;
   --text-primary: #F1F5F9;
@@ -21,16 +21,16 @@
   --text-dim: #334155;
 
   --neon-cyan: #00F0FF;
-  --neon-cyan-glow: rgba(0, 240, 255, 0.45);
+  --neon-cyan-glow: rgba(0, 240, 255, 0.5);
   --neon-azure: #38BDF8;
-  --neon-azure-glow: rgba(56, 189, 248, 0.45);
+  --neon-azure-glow: rgba(56, 189, 248, 0.5);
   --neon-emerald: #10B981;
-  --neon-emerald-glow: rgba(16, 185, 129, 0.45);
+  --neon-emerald-glow: rgba(16, 185, 129, 0.5);
   --neon-amber: #F59E0B;
 
-  --font-display: 'Outfit', -apple-system, sans-serif;
-  --font-hero: 'Space Grotesk', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-display: var(--font-outfit), -apple-system, sans-serif;
+  --font-hero: var(--font-space-grotesk), -apple-system, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
 
   --radius-pill: 9999px;
   --radius-capsule: 16px;
@@ -96,7 +96,7 @@ html, body {
 }
 
 /* Three.js 3D WebGL Canvas Viewport */
-#canvas-container-3d {
+.canvas-container-3d {
   position: fixed;
   inset: 0;
   z-index: 1;
@@ -106,11 +106,11 @@ html, body {
   touch-action: none;
 }
 
-#canvas-container-3d:active {
+.canvas-container-3d:active {
   cursor: grabbing;
 }
 
-#canvas-container-3d canvas {
+.canvas-container-3d canvas {
   width: 100% !important;
   height: 100% !important;
   display: block;
@@ -177,6 +177,12 @@ html, body {
 .laser-indicator.searching {
   background: var(--neon-amber);
   box-shadow: 0 0 12px var(--neon-amber);
+  animation: laserPulseWarn 1.2s infinite;
+}
+
+@keyframes laserPulseWarn {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.8); opacity: 0.4; }
 }
 
 .brand-meta {
@@ -208,7 +214,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(14, 20, 32, 0.4);
+  background: rgba(14, 20, 32, 0.45);
   border: 1px solid var(--border-subtle);
   padding: 6px 14px;
   border-radius: var(--radius-pill);
@@ -219,6 +225,7 @@ html, body {
   height: 5px;
   border-radius: 50%;
   background: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--neon-cyan);
 }
 
 .chip-text {
@@ -301,19 +308,19 @@ html, body {
 
 .hero-direction.state-right {
   color: var(--neon-azure);
-  text-shadow: 0 0 35px var(--neon-azure-glow), 0 0 70px rgba(56, 189, 248, 0.2);
+  text-shadow: 0 0 35px var(--neon-azure-glow), 0 0 70px rgba(56, 189, 248, 0.25);
   transform: scale(1.03);
 }
 
 .hero-direction.state-left {
   color: var(--neon-cyan);
-  text-shadow: 0 0 35px var(--neon-cyan-glow), 0 0 70px rgba(0, 240, 255, 0.2);
+  text-shadow: 0 0 35px var(--neon-cyan-glow), 0 0 70px rgba(0, 240, 255, 0.25);
   transform: scale(1.03);
 }
 
 .hero-direction.state-center {
   color: var(--neon-emerald);
-  text-shadow: 0 0 35px var(--neon-emerald-glow), 0 0 70px rgba(16, 185, 129, 0.2);
+  text-shadow: 0 0 35px var(--neon-emerald-glow), 0 0 70px rgba(16, 185, 129, 0.25);
   transform: scale(1.03);
 }
 
@@ -447,7 +454,7 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(11, 15, 24, 0.72);
+  background: rgba(11, 15, 24, 0.75);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
   border: 1px solid var(--border-subtle);
@@ -526,7 +533,7 @@ html, body {
 }
 
 .btn-impulse:hover {
-  background: rgba(0, 240, 255, 0.2);
+  background: rgba(0, 240, 255, 0.22);
   border-color: var(--neon-cyan);
   color: #FFFFFF;
   box-shadow: 0 0 24px rgba(0, 240, 255, 0.45);

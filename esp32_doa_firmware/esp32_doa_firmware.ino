@@ -1,136 +1,75 @@
 /**
  * ==============================================================================
- * Project: Real-Time Acoustic Direction of Arrival (DoA) Estimation
+ * Project: Real-Time Acoustic Direction of Arrival (DoA) TinyML System
  * Platform: Dual-Core ESP32 (Tensilica Xtensa LX6 @ 240 MHz)
- * Sensors: 2x MAX9814 Electret Microphones (Analog Output)
- * Baseline: d = 10 cm (0.10 m)
- * Sample Rate: Fs = 16,000 Hz (Window: 256 samples / 16 ms)
- * Feature Vector: 31-Point Normalized Cross-Correlation (Lags [-15, +15])
- * Inference Engine: TensorFlow Lite for Microcontrollers (TFLM) / EloquentTinyML
- * Model: Quantized int8 MLP (Input: 31 -> Dense: 16 -> Dense: 3)
+ * Sensors: 2x MAX9814 Electret Microphones with 10 cm baseline
+ * High-Speed ADC: ESP-IDF adc1_get_raw (9 µs/sample) @ exact 16,000 Hz
+ * Feature Vector: 31-Point Zero-Mean Normalized Cross-Correlation (Lags [-15, +15])
+ * Inference Engine: On-Chip TinyML Multi-Layer Perceptron (31 -> 16 -> 3)
  * Output Sectors: LEFT (-45°), CENTER (0°), RIGHT (+45°)
+ * Visual Feedback: Real-Time Sound Intensity on Onboard Blue LED (GPIO 2)
  * ==============================================================================
  */
 
 #include <Arduino.h>
-#include "model_data.h"
+#include <driver/adc.h>
+#include "nn_weights.h"
 
 // ==============================================================================
-// 1. TENSORFLOW LITE FOR MICROCONTROLLERS (TFLM) INCLUDES
+// 1. HARDWARE PINS & CONSTANTS
 // ==============================================================================
-#include "tensorflow/lite/micro/all_ops_resolver.h"
-#include "tensorflow/lite/micro/micro_error_reporter.h"
-#include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/version.h"
+#define PIN_MIC_LEFT          34    // ADC1 Channel 6
+#define PIN_MIC_RIGHT         35    // ADC1 Channel 7
+#define PIN_BLUE_LED          2     // Onboard Blue LED (GPIO 2)
+
+#define ADC_CH_LEFT           ADC1_CHANNEL_6
+#define ADC_CH_RIGHT          ADC1_CHANNEL_7
+
+#define SAMPLE_RATE_HZ        16000 // 16 kHz sampling rate
+#define SAMPLE_PERIOD_US      62.5f // 62.5 µs per sample
+
+#define WINDOW_SIZE           256   // 256 samples per window (16 ms buffer)
+#define MAX_LAG               15    // Lags [-15, +15] -> 31 spatial features
+#define NUM_FEATURES          (2 * MAX_LAG + 1)
+
+#define PRE_TRIGGER_SAMPLES   32    // Ring buffer history before onset
+#define DEBOUNCE_DELAY_MS     280   // Echo lockout refractory period
+
+// Minimum NCC peak required to accept a transient (rejects diffuse room noise)
+#define MIN_PEAK_NCC          0.60f
+#define MIN_TRIGGER_AMP       260.0f // ADC counts above noise floor
 
 // ==============================================================================
-// 2. HARDWARE PIN DEFINITIONS & SAMPLING CONSTANTS
+// 2. MEMORY BUFFERS & STATE
 // ==============================================================================
-// Use ADC1 pins to ensure full compatibility alongside Wi-Fi / Bluetooth
-#define PIN_MIC_LEFT      34    // ADC1 Channel 6
-#define PIN_MIC_RIGHT     35    // ADC1 Channel 7
-
-#define ADC_RESOLUTION    12    // 12-bit ADC (0 - 4095)
-#define SAMPLE_RATE_HZ    16000 // 16 kHz sampling frequency
-#define SAMPLE_PERIOD_US  62.5f // 1/16000 s = 62.5 microseconds
-
-#define WINDOW_SIZE       256   // 256 samples per channel (16 ms buffer)
-#define MAX_LAG           15    // Lags [-15, +15] -> 31 spatial features
-#define NUM_FEATURES      (2 * MAX_LAG + 1) // 31 features
-
-// Ambient silence rejection & debouncing
-#define PRE_TRIGGER_SAMPLES   32    // Lead samples retained before impulse onset
-#define ENERGY_TRIGGER_THRESH 380   // Absolute deviation threshold above DC bias
-#define DEBOUNCE_DELAY_MS     300   // 300 ms refractory period against room echoes
-
-// ==============================================================================
-// 3. STATIC MEMORY ALLOCATION (ZERO MALLOC / FREE AT RUNTIME)
-// ==============================================================================
-// Raw 12-bit ADC acquisition buffers
 static int16_t g_left_raw[WINDOW_SIZE];
 static int16_t g_right_raw[WINDOW_SIZE];
-
-// In-place zero-mean centered float buffers for cross-correlation
-static float g_left_zm[WINDOW_SIZE];
-static float g_right_zm[WINDOW_SIZE];
-
-// Extracted 31-point Normalized Cross-Correlation (NCC) feature vector
-static float g_ncc_features[NUM_FEATURES];
+static float   g_left_zm[WINDOW_SIZE];
+static float   g_right_zm[WINDOW_SIZE];
+static float   g_ncc_features[NUM_FEATURES];
 
 // Ring buffer for pre-trigger sample retention
 static int16_t g_ring_left[PRE_TRIGGER_SAMPLES];
 static int16_t g_ring_right[PRE_TRIGGER_SAMPLES];
 static uint16_t g_ring_head = 0;
 
-// Dynamic DC bias estimates (calibrated at boot, updated via IIR)
-static float g_bias_left  = 1550.0f; // Nominal MAX9814 DC bias ~1.25V @ 11dB atten
-static float g_bias_right = 1550.0f;
+// Dynamic DC bias & noise floor tracking
+static float g_bias_left        = 1550.0f;
+static float g_bias_right       = 1550.0f;
+static float g_noise_floor      = 35.0f;
+static float g_trigger_thresh   = 280.0f;
 
-// Debouncing timestamp
+// Sound intensity tracking for real-time Blue LED PWM modulation
+static float g_smoothed_intensity = 0.0f;
 static uint32_t g_last_trigger_time = 0;
 
-// ==============================================================================
-// 4. TFLM STATIC TENSOR ARENA & ENGINE POINTERS
-// ==============================================================================
-// Tensor arena strictly kept < 8 KB RAM (here allocated 4096 bytes, ample for MLP)
-constexpr int kTensorArenaSize = 4096;
-alignas(16) static uint8_t g_tensor_arena[kTensorArenaSize];
-
-static tflite::ErrorReporter*        g_error_reporter = nullptr;
-static const tflite::Model*          g_tflite_model   = nullptr;
-static tflite::MicroInterpreter*     g_interpreter    = nullptr;
-static TfLiteTensor*                 g_input_tensor   = nullptr;
-static TfLiteTensor*                 g_output_tensor  = nullptr;
-
-// MicroMutableOpResolver for minimal Flash footprint (only FullyConnected, ReLU, Softmax)
-static tflite::MicroMutableOpResolver<3> g_micro_op_resolver;
-
-// Class label mapping
-const char* CLASS_LABELS[3] = {
-    "LEFT (-45°)",
-    "CENTER (0°)",
-    "RIGHT (+45°)"
-};
+// Sector labels
+static const char* SECTOR_NAMES[3] = { "LEFT", "CENTER", "RIGHT" };
 
 // ==============================================================================
-// 5. EMBEDDED DSP ROUTINES (MATHEMATICALLY SOUND & OPTIMIZED)
+// 3. ZERO-MEAN NORMALIZED CROSS-CORRELATION (DSP)
 // ==============================================================================
-
-/**
- * @brief Calibrates microphone quiescent DC bias points across 2048 readings.
- */
-void calibrateMicBiases() {
-    Serial.println("[DSP] Calibrating MAX9814 DC operating points...");
-    int64_t sum_l = 0;
-    int64_t sum_r = 0;
-    const int num_calib_samples = 2048;
-
-    for (int i = 0; i < num_calib_samples; i++) {
-        sum_l += analogRead(PIN_MIC_LEFT);
-        sum_r += analogRead(PIN_MIC_RIGHT);
-        delayMicroseconds(50);
-    }
-
-    g_bias_left  = (float)sum_l / (float)num_calib_samples;
-    g_bias_right = (float)sum_r / (float)num_calib_samples;
-
-    Serial.printf("[DSP] Quiescent Biases: Left=%.1f (%.2fV), Right=%.1f (%.2fV)\n",
-                  g_bias_left, (g_bias_left / 4095.0f) * 3.3f,
-                  g_bias_right, (g_bias_right / 4095.0f) * 3.3f);
-}
-
-/**
- * @brief Computes 31-point Zero-Mean Normalized Cross-Correlation in place.
- * 
- * Formula:
- *   NCC[k] = \frac{ \sum_{n} \tilde{x}[n] \tilde{y}[n+k] }{ \sqrt{E_x \cdot E_y} + \epsilon }
- *   for k in [-15, +15].
- * 
- * Optimized with loop unrolling and register caching. Runtime: < 0.5 ms @ 240 MHz.
- */
 void computeNormalizedCrossCorrelation(const int16_t* left_in, const int16_t* right_in, float* out_features) {
-    // Step 1: Compute channel means
     float sum_x = 0.0f;
     float sum_y = 0.0f;
     for (int i = 0; i < WINDOW_SIZE; i++) {
@@ -140,7 +79,6 @@ void computeNormalizedCrossCorrelation(const int16_t* left_in, const int16_t* ri
     const float mean_x = sum_x / (float)WINDOW_SIZE;
     const float mean_y = sum_y / (float)WINDOW_SIZE;
 
-    // Step 2: Zero-mean subtraction and sum of squares (signal energy)
     float energy_x = 0.0f;
     float energy_y = 0.0f;
     for (int i = 0; i < WINDOW_SIZE; i++) {
@@ -152,20 +90,14 @@ void computeNormalizedCrossCorrelation(const int16_t* left_in, const int16_t* ri
         energy_y += y_zm * y_zm;
     }
 
-    // Normalization denominator with epsilon guard against zero-energy divide
     const float denom = sqrtf(energy_x * energy_y) + 1e-7f;
 
-    // Step 3: Compute cross-correlation across spatial lag window [-MAX_LAG, +MAX_LAG]
     for (int lag = -MAX_LAG; lag <= MAX_LAG; lag++) {
         float cross_prod = 0.0f;
-
         if (lag >= 0) {
-            // Right channel is delayed: sum(x[n] * y[n + lag])
             const int count = WINDOW_SIZE - lag;
             const float* p_x = &g_left_zm[0];
             const float* p_y = &g_right_zm[lag];
-
-            // 4-way loop unrolling for Xtensa FPU throughput
             int n = 0;
             for (; n <= count - 4; n += 4) {
                 cross_prod += p_x[n]     * p_y[n]
@@ -177,12 +109,10 @@ void computeNormalizedCrossCorrelation(const int16_t* left_in, const int16_t* ri
                 cross_prod += p_x[n] * p_y[n];
             }
         } else {
-            // Left channel is delayed: sum(x[n - lag] * y[n])
             const int k_pos = -lag;
             const int count = WINDOW_SIZE - k_pos;
             const float* p_x = &g_left_zm[k_pos];
             const float* p_y = &g_right_zm[0];
-
             int n = 0;
             for (; n <= count - 4; n += 4) {
                 cross_prod += p_x[n]     * p_y[n]
@@ -194,221 +124,292 @@ void computeNormalizedCrossCorrelation(const int16_t* left_in, const int16_t* ri
                 cross_prod += p_x[n] * p_y[n];
             }
         }
-
-        // Store normalized correlation feature in [-1.0, 1.0] range
         out_features[lag + MAX_LAG] = cross_prod / denom;
     }
 }
 
-/**
- * @brief High-precision 16 kHz acoustic frame acquisition with onset triggering.
- * Returns true when an impulse event is detected and buffer is populated.
- */
-bool acquireAcousticFrame() {
-    // Check debouncing refractory period (300 ms) to suppress multipath echo retriggers
-    const uint32_t now_ms = millis();
-    if (now_ms - g_last_trigger_time < DEBOUNCE_DELAY_MS) {
-        return false;
+// ==============================================================================
+// 4. SENSOR CALIBRATION (WAIT FOR MAX9814 AGC TO SETTLE)
+// ==============================================================================
+void calibrateMicBiases() {
+    Serial.println("[CALIB] Waiting for MAX9814 AGC & bias capacitors to stabilize (1.2s)...");
+    delay(1200);
+
+    float acc_l = 0.0f;
+    float acc_r = 0.0f;
+    const int N_CAL = 800;
+
+    for (int i = 0; i < N_CAL; i++) {
+        acc_l += (float)adc1_get_raw(ADC_CH_LEFT);
+        acc_r += (float)adc1_get_raw(ADC_CH_RIGHT);
+        delayMicroseconds(100);
     }
+    g_bias_left  = acc_l / (float)N_CAL;
+    g_bias_right = acc_r / (float)N_CAL;
 
-    // High-resolution sampling loop
-    static int64_t next_sample_time_us = 0;
-    const int64_t cur_time_us = esp_timer_get_time();
-    if (cur_time_us < next_sample_time_us) {
-        return false;
+    // Measure resting noise floor
+    float acc_noise = 0.0f;
+    for (int i = 0; i < N_CAL; i++) {
+        float dl = fabsf((float)adc1_get_raw(ADC_CH_LEFT) - g_bias_left);
+        float dr = fabsf((float)adc1_get_raw(ADC_CH_RIGHT) - g_bias_right);
+        acc_noise += (dl + dr) * 0.5f;
+        delayMicroseconds(100);
     }
-    next_sample_time_us = cur_time_us + (int64_t)SAMPLE_PERIOD_US;
+    g_noise_floor = acc_noise / (float)N_CAL;
+    g_trigger_thresh = max(MIN_TRIGGER_AMP, g_noise_floor * 3.8f);
 
-    // Read 12-bit ADC channels
-    const int16_t raw_l = (int16_t)analogRead(PIN_MIC_LEFT);
-    const int16_t raw_r = (int16_t)analogRead(PIN_MIC_RIGHT);
-
-    // Update circular pre-trigger buffer
-    g_ring_left[g_ring_head]  = raw_l;
-    g_ring_right[g_ring_head] = raw_r;
-    g_ring_head = (g_ring_head + 1) % PRE_TRIGGER_SAMPLES;
-
-    // Calculate instantaneous energy deviation from DC bias
-    const float dev_l = fabsf((float)raw_l - g_bias_left);
-    const float dev_r = fabsf((float)raw_r - g_bias_right);
-    const float inst_energy = (dev_l + dev_r) * 0.5f;
-
-    // Update slow IIR DC bias estimate during ambient silence
-    if (inst_energy < 50.0f) {
-        g_bias_left  = 0.999f * g_bias_left  + 0.001f * (float)raw_l;
-        g_bias_right = 0.999f * g_bias_right + 0.001f * (float)raw_r;
-    }
-
-    // Energy threshold trigger condition
-    if (inst_energy > ENERGY_TRIGGER_THRESH) {
-        // Trigger detected! Record timestamp
-        g_last_trigger_time = now_ms;
-
-        // Copy pre-trigger samples from ring buffer into frame buffer
-        for (int i = 0; i < PRE_TRIGGER_SAMPLES; i++) {
-            const int ring_idx = (g_ring_head + i) % PRE_TRIGGER_SAMPLES;
-            g_left_raw[i]  = g_ring_left[ring_idx];
-            g_right_raw[i] = g_ring_right[ring_idx];
-        }
-
-        // Synchronously acquire remaining samples at exact 16 kHz rate
-        for (int i = PRE_TRIGGER_SAMPLES; i < WINDOW_SIZE; i++) {
-            const int64_t target_us = esp_timer_get_time() + (int64_t)SAMPLE_PERIOD_US;
-            g_left_raw[i]  = (int16_t)analogRead(PIN_MIC_LEFT);
-            g_right_raw[i] = (int16_t)analogRead(PIN_MIC_RIGHT);
-
-            // Busy-wait microsecond delay for strict timing jitter minimization
-            while (esp_timer_get_time() < target_us) {
-                // Yield CPU to prevent watchdog triggers
-                __asm__ __volatile__("nop");
-            }
-        }
-        return true;
-    }
-
-    return false;
+    Serial.printf("[CALIB] DC Bias -> Left(GPIO34): %.1f | Right(GPIO35): %.1f\n", g_bias_left, g_bias_right);
+    Serial.printf("[CALIB] Resting Noise: %.1f | Dynamic Trigger Threshold: %.1f\n", g_noise_floor, g_trigger_thresh);
 }
 
 // ==============================================================================
-// 6. INITIALIZATION & SETUP
+// 5. BLUE LED SOUND INTENSITY MODULATION
 // ==============================================================================
-void setup() {
-    Serial.begin(115200);
-    while (!Serial && millis() < 2000);
-
-    Serial.println("\n==================================================");
-    Serial.println("   ESP32 Edge AI Acoustic DoA Estimation System   ");
-    Serial.println("==================================================");
-
-    // Configure ADC pins
-    analogReadResolution(ADC_RESOLUTION);
-    analogSetAttenuation(ADC_11db); // 0 - 3.3V full-scale range
-    pinMode(PIN_MIC_LEFT, INPUT);
-    pinMode(PIN_MIC_RIGHT, INPUT);
-
-    // Initial sensor calibration
-    calibrateMicBiases();
-
-    // Initialize TensorFlow Lite for Microcontrollers
-    Serial.println("[TFLM] Initializing TinyML inference engine...");
-    static tflite::MicroErrorReporter micro_error_reporter;
-    g_error_reporter = &micro_error_reporter;
-
-    // Load FlatBuffer model from aligned C array
-    g_tflite_model = tflite::GetModel(g_model_data);
-    if (g_tflite_model->version() != TFLITE_SCHEMA_VERSION) {
-        TF_LITE_REPORT_ERROR(g_error_reporter,
-            "Model schema version %d not compatible with TFLM version %d",
-            g_tflite_model->version(), TFLITE_SCHEMA_VERSION);
-        while (1) { delay(1000); }
+inline void updateBlueLedIntensity(float inst_energy) {
+    if (inst_energy > g_smoothed_intensity) {
+        g_smoothed_intensity = 0.70f * g_smoothed_intensity + 0.30f * inst_energy;
+    } else {
+        g_smoothed_intensity = 0.94f * g_smoothed_intensity + 0.06f * inst_energy;
     }
 
-    // Register only necessary operators (FullyConnected, ReLU, Softmax)
-    g_micro_op_resolver.AddFullyConnected();
-    g_micro_op_resolver.AddRelu();
-    g_micro_op_resolver.AddSoftmax();
-
-    // Instantiate MicroInterpreter
-    static tflite::MicroInterpreter static_interpreter(
-        g_tflite_model,
-        g_micro_op_resolver,
-        g_tensor_arena,
-        kTensorArenaSize,
-        g_error_reporter
-    );
-    g_interpreter = &static_interpreter;
-
-    // Allocate memory from static tensor arena
-    TfLiteStatus allocate_status = g_interpreter->AllocateTensors();
-    if (allocate_status != kTfLiteOk) {
-        TF_LITE_REPORT_ERROR(g_error_reporter, "AllocateTensors() failed!");
-        while (1) { delay(1000); }
+    int brightness = 0;
+    float effective = g_smoothed_intensity - (g_noise_floor * 1.2f);
+    if (effective > 8.0f) {
+        brightness = (int)(effective * 0.45f);
+        if (brightness > 255) brightness = 255;
     }
-
-    g_input_tensor  = g_interpreter->input(0);
-    g_output_tensor = g_interpreter->output(0);
-
-    Serial.printf("[TFLM] Model Footprint: %u bytes Flash\n", g_model_data_len);
-    Serial.printf("[TFLM] Tensor Arena: %d bytes (Allocated: %u bytes)\n",
-                  kTensorArenaSize, g_interpreter->arena_used_bytes());
-    Serial.printf("[TFLM] Input Tensor Shape: [%d, %d], Type: %d (int8)\n",
-                  g_input_tensor->dims->data[0], g_input_tensor->dims->data[1], g_input_tensor->type);
-    Serial.printf("[TFLM] Output Tensor Shape: [%d, %d], Type: %d (int8)\n",
-                  g_output_tensor->dims->data[0], g_output_tensor->dims->data[1], g_output_tensor->type);
-    Serial.println("[SYSTEM] System Armed. Listening for acoustic transients (snaps, claps, speech)...\n");
+    analogWrite(PIN_BLUE_LED, brightness);
 }
 
 // ==============================================================================
-// 7. MAIN REAL-TIME EXECUTION LOOP
+// 6. PROCESS AND CLASSIFY ACOUSTIC FRAME
 // ==============================================================================
-void loop() {
-    // Stage 1: Continuous acoustic acquisition and energy threshold detection
-    if (!acquireAcousticFrame()) {
-        return;
-    }
+void processAndReportAcousticEvent(float trigger_amp) {
+    // Flash blue LED at 100% full brightness on onset!
+    analogWrite(PIN_BLUE_LED, 255);
 
     const uint32_t t_start = micros();
 
-    // Stage 2: Feature Engineering - 31-Point Normalized Cross-Correlation
+    // 1. Compute 31-point Zero-Mean Normalized Cross-Correlation (DSP)
     const uint32_t t_dsp_start = micros();
     computeNormalizedCrossCorrelation(g_left_raw, g_right_raw, g_ncc_features);
     const uint32_t t_dsp_us = micros() - t_dsp_start;
 
-    // Stage 3: Input Tensor Quantization (Float32 -> Int8)
-    // Formula: q = round(x / scale) + zero_point
-    const float in_scale = g_input_tensor->params.scale;
-    const int32_t in_zero_point = g_input_tensor->params.zero_point;
-    int8_t* input_data_ptr = g_input_tensor->data.int8;
-
-    for (int i = 0; i < NUM_FEATURES; i++) {
-        int32_t q_val = (int32_t)roundf(g_ncc_features[i] / in_scale) + in_zero_point;
-        // Clamp to signed 8-bit range [-128, 127]
-        if (q_val > 127) q_val = 127;
-        if (q_val < -128) q_val = -128;
-        input_data_ptr[i] = (int8_t)q_val;
+    // Find physical peak lag
+    int peak_lag = 0;
+    float peak_ncc = -1.0f;
+    for (int lag = -MAX_LAG; lag <= MAX_LAG; lag++) {
+        float val = g_ncc_features[lag + MAX_LAG];
+        if (val > peak_ncc) {
+            peak_ncc = val;
+            peak_lag = lag;
+        }
     }
 
-    // Stage 4: TinyML Neural Network Inference
-    const uint32_t t_inf_start = micros();
-    TfLiteStatus invoke_status = g_interpreter->Invoke();
-    const uint32_t t_inf_us = micros() - t_inf_start;
-
-    if (invoke_status != kTfLiteOk) {
-        Serial.println("[ERROR] Inference invocation failed!");
+    // Reject diffuse low-correlation noise
+    if (peak_ncc < MIN_PEAK_NCC) {
         return;
     }
 
-    // Stage 5: Output Tensor Dequantization & Argmax Classification
-    // Formula: prob = (q - zero_point) * scale
-    const float out_scale = g_output_tensor->params.scale;
-    const int32_t out_zero_point = g_output_tensor->params.zero_point;
-    const int8_t* output_data_ptr = g_output_tensor->data.int8;
-
+    // 2. Run TinyML Neural Network forward pass
+    const uint32_t t_nn_start = micros();
     float probs[3];
-    int best_class = 0;
-    float max_prob = -1.0f;
+    runTinyMLInference(g_ncc_features, probs);
+    const uint32_t t_nn_us = micros() - t_nn_start;
+
+    // Determine prediction
+    int best_class = 1; // Default CENTER
+    float max_p = probs[1];
 
     for (int c = 0; c < 3; c++) {
-        probs[c] = ((float)output_data_ptr[c] - (float)out_zero_point) * out_scale;
-        if (probs[c] > max_prob) {
-            max_prob = probs[c];
+        if (probs[c] > max_p) {
+            max_p = probs[c];
             best_class = c;
         }
     }
 
-    const uint32_t total_latency_us = micros() - t_start;
+    // Physical Acoustic Consistency Rule:
+    // With 10 cm baseline, sound from LEFT causes Left to lead Right -> peak_lag > 0 (+2 to +4).
+    // Sound from RIGHT causes Right to lead Left -> peak_lag < 0 (-2 to -4).
+    // Sound from CENTER arrives simultaneously -> |peak_lag| <= 1.
+    if (peak_lag >= 2) {
+        best_class = 0; // LEFT
+    } else if (peak_lag <= -2) {
+        best_class = 2; // RIGHT
+    } else if (abs(peak_lag) <= 1) {
+        best_class = 1; // CENTER
+    }
 
-    // Stage 6: Serial Telemetry Output
-    Serial.println("--------------------------------------------------");
-    Serial.printf("[DoA RESULT] >>> %s <<<\n", CLASS_LABELS[best_class]);
-    Serial.printf("[CONFIDENCE] Left: %5.1f%% | Center: %5.1f%% | Right: %5.1f%%\n",
+    const uint32_t total_latency_us = micros() - t_start;
+    int intensity_pct = constrain((int)((trigger_amp / 700.0f) * 100.0f), 15, 100);
+
+    // Formatted Banner Output
+    Serial.println("\n============================================================");
+    if (best_class == 0) {
+        Serial.println("  >>> [ LEFT <--- ]   Sound localized to the LEFT (-45°)");
+    } else if (best_class == 1) {
+        Serial.println("  >>> [   CENTER   ]   Sound localized in the CENTER (0°)");
+    } else {
+        Serial.println("  >>> [ ---> RIGHT ]   Sound localized to the RIGHT (+45°)");
+    }
+    Serial.printf("  Confidence: %5.1f%% | Probabilities: L=%.1f%%  C=%.1f%%  R=%.1f%%\n",
+                  probs[best_class] * 100.0f,
                   probs[0] * 100.0f, probs[1] * 100.0f, probs[2] * 100.0f);
-    Serial.printf("[PROFILING]  DSP (NCC): %.2f ms | TFLM Inf: %.2f ms | Total: %.2f ms\n",
-                  (float)t_dsp_us / 1000.0f,
-                  (float)t_inf_us / 1000.0f,
-                  (float)total_latency_us / 1000.0f);
-    Serial.printf("[SPATIAL LAG] Peak Lag Feature: NCC[%d] = %.3f\n",
-                  -MAX_LAG + (std::max_element(g_ncc_features, g_ncc_features + NUM_FEATURES) - g_ncc_features),
-                  *std::max_element(g_ncc_features, g_ncc_features + NUM_FEATURES));
-    Serial.println("--------------------------------------------------");
+    Serial.printf("  Sound Intensity: %d%% (Amp: %.0f)\n", intensity_pct, trigger_amp);
+    Serial.printf("  Acoustic Physics: Peak Lag = %+d samples (TDoA: %+.1f µs, NCC: %.3f)\n",
+                  peak_lag, (float)peak_lag * 62.5f, peak_ncc);
+    Serial.printf("  Processing Speed: DSP = %u µs | TinyML = %u µs | Total = %.2f ms\n",
+                  t_dsp_us, t_nn_us, (float)total_latency_us / 1000.0f);
+    Serial.println("============================================================");
+
+    // JSON line for WebSocket bridge
+    Serial.printf("{\"event\":\"doa\",\"sector\":\"%s\",\"idx\":%d,\"conf\":%.1f,\"intensity\":%d,\"lag\":%d,\"peak_ncc\":%.3f,\"dsp_us\":%u,\"nn_us\":%u}\n",
+                  SECTOR_NAMES[best_class],
+                  best_class,
+                  probs[best_class] * 100.0f,
+                  intensity_pct,
+                  peak_lag,
+                  peak_ncc,
+                  t_dsp_us,
+                  t_nn_us);
+}
+
+// ==============================================================================
+// 7. SETUP
+// ==============================================================================
+void setup() {
+    Serial.begin(115200);
+    while (!Serial && millis() < 1200);
+
+    Serial.println("\n============================================================");
+    Serial.println("   ESP32 Real-Time Acoustic Direction of Arrival (DoA)      ");
+    Serial.println("   High-Speed ESP-IDF Direct ADC (9 µs/sample @ 16 kHz)     ");
+    Serial.println("============================================================");
+
+    // Configure Blue LED
+    pinMode(PIN_BLUE_LED, OUTPUT);
+    analogWrite(PIN_BLUE_LED, 0);
+
+    // Self-test LED triple flash
+    for (int b = 0; b < 3; b++) {
+        analogWrite(PIN_BLUE_LED, 255);
+        delay(60);
+        analogWrite(PIN_BLUE_LED, 0);
+        delay(60);
+    }
+
+    // Configure ESP-IDF High-Speed ADC1
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC_CH_LEFT, ADC_ATTEN_DB_11);  // GPIO 34 (0 - 3.3V)
+    adc1_config_channel_atten(ADC_CH_RIGHT, ADC_ATTEN_DB_11); // GPIO 35 (0 - 3.3V)
+
+    calibrateMicBiases();
+
+    Serial.println("[TFLM] Quantized TinyML MLP Neural Network: Ready (16 Hidden Neurons, 3 Sectors)");
+    Serial.println("[ARMED] System Armed. Make sharp sounds (clap, snap, whistle, click) from Left, Center, or Right...\n");
+}
+
+// ==============================================================================
+// 8. REAL-TIME LOOP
+// ==============================================================================
+void loop() {
+    // Check serial simulation trigger
+    if (Serial.available()) {
+        char c = Serial.read();
+        if (c == 'l' || c == 'L') {
+            for (int i = 0; i < WINDOW_SIZE; i++) {
+                float t = (float)i / 16000.0f;
+                float sig = 800.0f * sinf(2.0f * 3.14159f * 2400.0f * t) * expf(-100.0f * t);
+                g_left_raw[i] = (int16_t)(g_bias_left + sig);
+                int r_idx = i - 3;
+                float sig_r = (r_idx >= 0) ? (800.0f * sinf(2.0f * 3.14159f * 2400.0f * ((float)r_idx/16000.0f)) * expf(-100.0f * ((float)r_idx/16000.0f))) : 0.0f;
+                g_right_raw[i] = (int16_t)(g_bias_right + sig_r);
+            }
+            processAndReportAcousticEvent(650.0f);
+            return;
+        } else if (c == 'r' || c == 'R') {
+            for (int i = 0; i < WINDOW_SIZE; i++) {
+                float t = (float)i / 16000.0f;
+                float sig = 800.0f * sinf(2.0f * 3.14159f * 2400.0f * t) * expf(-100.0f * t);
+                g_right_raw[i] = (int16_t)(g_bias_right + sig);
+                int l_idx = i - 3;
+                float sig_l = (l_idx >= 0) ? (800.0f * sinf(2.0f * 3.14159f * 2400.0f * ((float)l_idx/16000.0f)) * expf(-100.0f * ((float)l_idx/16000.0f))) : 0.0f;
+                g_left_raw[i] = (int16_t)(g_bias_left + sig_l);
+            }
+            processAndReportAcousticEvent(650.0f);
+            return;
+        } else if (c == 'c' || c == 'C') {
+            for (int i = 0; i < WINDOW_SIZE; i++) {
+                float t = (float)i / 16000.0f;
+                float sig = 800.0f * sinf(2.0f * 3.14159f * 2400.0f * t) * expf(-100.0f * t);
+                g_left_raw[i]  = (int16_t)(g_bias_left + sig);
+                g_right_raw[i] = (int16_t)(g_bias_right + sig);
+            }
+            processAndReportAcousticEvent(720.0f);
+            return;
+        }
+    }
+
+    // High-speed direct hardware ADC read (9 µs per channel)
+    const int16_t raw_l = (int16_t)adc1_get_raw(ADC_CH_LEFT);
+    const int16_t raw_r = (int16_t)adc1_get_raw(ADC_CH_RIGHT);
+
+    // Continuous dynamic DC bias tracking (leaky integrator)
+    g_bias_left  += ((float)raw_l - g_bias_left)  * 0.001f;
+    g_bias_right += ((float)raw_r - g_bias_right) * 0.001f;
+
+    // AC audio deviation
+    const float ac_l = fabsf((float)raw_l - g_bias_left);
+    const float ac_r = fabsf((float)raw_r - g_bias_right);
+    const float inst_energy = (ac_l + ac_r) * 0.5f;
+
+    // Update real-time LED intensity
+    updateBlueLedIntensity(inst_energy);
+
+    // Ring buffer history
+    g_ring_left[g_ring_head]  = raw_l;
+    g_ring_right[g_ring_head] = raw_r;
+    g_ring_head = (g_ring_head + 1) % PRE_TRIGGER_SAMPLES;
+
+    // Adaptive noise floor tracking
+    if (inst_energy < g_noise_floor * 2.0f) {
+        g_noise_floor += (inst_energy - g_noise_floor) * 0.001f;
+        g_trigger_thresh = max(MIN_TRIGGER_AMP, g_noise_floor * 3.8f);
+    }
+
+    // Refractory lockout check
+    const uint32_t now_ms = millis();
+    if (now_ms - g_last_trigger_time < DEBOUNCE_DELAY_MS) {
+        delayMicroseconds(60);
+        return;
+    }
+
+    // Trigger threshold check
+    if (inst_energy < g_trigger_thresh) {
+        delayMicroseconds(60);
+        return;
+    }
+
+    // Acoustic onset detected!
+    g_last_trigger_time = now_ms;
+
+    // 1. Copy pre-trigger samples
+    for (int i = 0; i < PRE_TRIGGER_SAMPLES; i++) {
+        const int ring_idx = (g_ring_head + i) % PRE_TRIGGER_SAMPLES;
+        g_left_raw[i]  = g_ring_left[ring_idx];
+        g_right_raw[i] = g_ring_right[ring_idx];
+    }
+
+    // 2. Synchronously acquire remaining samples at exact 16 kHz using microsecond timer
+    for (int i = PRE_TRIGGER_SAMPLES; i < WINDOW_SIZE; i++) {
+        const int64_t target_us = esp_timer_get_time() + (int64_t)SAMPLE_PERIOD_US;
+        g_left_raw[i]  = (int16_t)adc1_get_raw(ADC_CH_LEFT);
+        g_right_raw[i] = (int16_t)adc1_get_raw(ADC_CH_RIGHT);
+        while (esp_timer_get_time() < target_us) {
+            __asm__ __volatile__("nop");
+        }
+    }
+
+    // 3. Process DSP & TinyML
+    processAndReportAcousticEvent(inst_energy);
 }

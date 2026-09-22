@@ -24,6 +24,8 @@ Thumbs.db
 # Compiled Binaries & CLI Tools
 arduino-cli
 test_dsp
+test_dsp.exe
+*.exe
 *.o
 *.a
 *.elf
@@ -38,3 +40,11 @@ test_dsp
 # Temporary & Build Output
 build/
 *.tmp
+scratch/
+
+# Node.js & Next.js
+node_modules/
+.next/
+web/node_modules/
+web/.next/
+

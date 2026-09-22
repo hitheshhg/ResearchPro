@@ -2,10 +2,10 @@
 """
 ResearchPro - Real-Time Acoustic Direction of Arrival (DoA) TinyML Server
 Provides interactive REST and WebSocket APIs for:
-1. Real-time Acoustic Waveform & Room Physics Simulation
-2. Zero-Mean 31-Point Normalized Cross-Correlation (NCC) DSP
-3. Quantized int8 TFLite Model Inference
-4. ESP32 Hardware Benchmark & Telemetry Bridging
+1. 3D Spatial Acoustic Field & Real-Time Direction of Arrival Visualization
+2. Real-time ESP32 Hardware Serial Telemetry Bridging (WebSocket)
+3. Zero-Mean 31-Point Normalized Cross-Correlation (NCC) DSP
+4. Quantized int8 TFLite Model Inference
 5. IEEE Report & Presentation Document Serving
 """
 
@@ -15,9 +15,13 @@ import math
 import time
 import json
 import random
+import asyncio
+import threading
 import subprocess
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from typing import List, Dict, Any, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,8 +33,8 @@ import tensorflow as tf
 
 app = FastAPI(
     title="ESP32 Acoustic DoA TinyML Research Platform",
-    description="Real-Time Acoustic Direction of Arrival Estimation on ESP32 Microcontrollers",
-    version="1.0.0"
+    description="Real-Time Acoustic Direction of Arrival Estimation with 3D Spatial Display & Hardware Telemetry",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -67,6 +71,158 @@ try:
 except Exception as e:
     print(f"[SERVER WARNING] Could not load TFLite model: {e}")
     interpreter = None
+
+# ==============================================================================
+# HARDWARE SERIAL TELEMETRY BRIDGE
+# ==============================================================================
+class HardwareSerialBridge:
+    def __init__(self):
+        self.ser = None
+        self.port = "COM3"
+        self.baud = 115200
+        self.is_connected = False
+        self.running = True
+        self.thread = None
+        self.active_websockets: List[WebSocket] = []
+        self.loop = None
+        self.lock = threading.Lock()
+
+    def set_loop(self, loop):
+        self.loop = loop
+
+    def find_port(self) -> str:
+        try:
+            import serial.tools.list_ports
+            ports = list(serial.tools.list_ports.comports())
+            for p in ports:
+                desc = (p.description or "").lower()
+                dev = (p.device or "").lower()
+                if "cp210" in desc or "uart" in desc or "silicon" in desc or "com3" in dev:
+                    return p.device
+            if ports:
+                return ports[0].device
+        except Exception:
+            pass
+        return "COM3"
+
+    def start(self):
+        self.thread = threading.Thread(target=self._run_reader, daemon=True)
+        self.thread.start()
+
+    def send_command(self, cmd_char: str) -> bool:
+        with self.lock:
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.write(cmd_char.encode("utf-8"))
+                    self.ser.flush()
+                    return True
+                except Exception as e:
+                    print(f"[SERIAL WRITE ERROR] {e}")
+        return False
+
+    def _run_reader(self):
+        import serial
+        buffer = ""
+        while self.running:
+            if not self.ser or not self.ser.is_open:
+                target_port = self.find_port()
+                try:
+                    s = serial.Serial()
+                    s.port = target_port
+                    s.baudrate = self.baud
+                    s.timeout = 0.2
+                    s.dtr = False
+                    s.rts = False
+                    s.open()
+                    with self.lock:
+                        self.ser = s
+                        self.port = target_port
+                        self.is_connected = True
+                    print(f"[SERIAL] Connected to ESP32 on {target_port} at {self.baud} baud")
+                    self._broadcast_sync({
+                        "type": "status",
+                        "hardware_connected": True,
+                        "port": target_port
+                    })
+                except Exception:
+                    with self.lock:
+                        self.is_connected = False
+                    time.sleep(2.0)
+                    continue
+
+            try:
+                with self.lock:
+                    if not self.ser or not self.ser.is_open:
+                        continue
+                    available = self.ser.in_waiting
+                    raw = self.ser.read(available) if available else b""
+
+                if raw:
+                    buffer += raw.decode("utf-8", errors="replace")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if line:
+                            self._process_line(line)
+                else:
+                    time.sleep(0.03)
+            except Exception as e:
+                with self.lock:
+                    try:
+                        if self.ser:
+                            self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+                    self.is_connected = False
+                time.sleep(1.0)
+
+    def _process_line(self, line: str):
+        print(f"[ESP32 SERIAL] {line}")
+        # 1. JSON Telemetry Line
+        if line.startswith("{") and "doa" in line:
+            try:
+                data = json.loads(line)
+                sector = data.get("sector", "CENTER")
+                angle = -45.0 if sector == "LEFT" else (45.0 if sector == "RIGHT" else 0.0)
+                
+                event = {
+                    "type": "doa_event",
+                    "source": "esp32_hardware",
+                    "sector": sector,
+                    "angle_deg": angle,
+                    "confidence": float(data.get("conf", 95.0)),
+                    "intensity": int(data.get("intensity", 80)),
+                    "peak_lag": int(data.get("lag", 0)),
+                    "peak_ncc": float(data.get("peak_ncc", 0.98)),
+                    "dsp_us": int(data.get("dsp_us", 215)),
+                    "nn_us": int(data.get("nn_us", 50)),
+                    "timestamp": time.time()
+                }
+                self._broadcast_sync(event)
+                return
+            except Exception:
+                pass
+
+
+
+    def _broadcast_sync(self, msg_dict: dict):
+        if not self.loop or not self.active_websockets:
+            return
+        msg_str = json.dumps(msg_dict)
+        for ws in list(self.active_websockets):
+            try:
+                asyncio.run_coroutine_threadsafe(ws.send_text(msg_str), self.loop)
+            except Exception:
+                pass
+
+hardware_bridge = HardwareSerialBridge()
+
+@app.on_event("startup")
+async def startup_event():
+    loop = asyncio.get_event_loop()
+    hardware_bridge.set_loop(loop)
+    hardware_bridge.start()
 
 class SimulationRequest(BaseModel):
     angle_deg: float = 0.0          # Angle in degrees (-90 to +90)
@@ -138,19 +294,17 @@ def compute_ncc_dsp(left_sig, right_sig, max_lag=MAX_LAG):
 def run_tflite_inference(features: np.ndarray):
     """Runs quantized int8 TFLite inference on 31-point feature vector."""
     if interpreter is None:
-        # Fallback simulation
         peak_idx = int(np.argmax(features)) - MAX_LAG
         if peak_idx < -2:
-            return 0, [0.94, 0.04, 0.02]
+            return 0, [0.94, 0.04, 0.02], 2.0
         elif peak_idx > 2:
-            return 2, [0.02, 0.05, 0.93]
+            return 2, [0.02, 0.05, 0.93], 2.0
         else:
-            return 1, [0.03, 0.95, 0.02]
+            return 1, [0.03, 0.95, 0.02], 2.0
 
     in_scale, in_zero = input_details[0]['quantization']
     out_scale, out_zero = output_details[0]['quantization']
 
-    # Quantize float features to int8
     quantized_input = np.clip(
         np.round(features / in_scale) + in_zero, -128, 127
     ).astype(np.int8).reshape(1, -1)
@@ -162,9 +316,7 @@ def run_tflite_inference(features: np.ndarray):
     latency_us = (t_end - t_start) / 1000.0
 
     quantized_output = interpreter.get_tensor(output_details[0]['index'])[0]
-    # Dequantize to float probabilities
     dequant_probs = (quantized_output.astype(np.float32) - out_zero) * out_scale
-    # Normalize probabilities via softmax if needed
     exp_p = np.exp(dequant_probs - np.max(dequant_probs))
     probs = (exp_p / np.sum(exp_p)).tolist()
 
@@ -173,26 +325,13 @@ def run_tflite_inference(features: np.ndarray):
 
 @app.post("/api/simulate")
 def simulate_acoustic_event(req: SimulationRequest):
-    """
-    Simulates acoustic propagation in a reverberant environment,
-    computes TDoA, applies room reflections, extracts 31 NCC features,
-    and runs int8 TinyML inference.
-    """
     t0 = time.perf_counter()
 
-    # 1. Physics: TDoA calculation
     theta_rad = math.radians(req.angle_deg)
-    # Mic L is at -d/2, Mic R is at +d/2 along X.
-    # Acoustic path difference: delta_d = d * sin(theta)
-    # Mic Left receives earlier if theta < 0 (delta_d < 0)
     delta_t_s = (MIC_BASELINE * math.sin(theta_rad)) / SPEED_OF_SOUND
     delay_samples = delta_t_s * FS
 
-    # 2. Synthesize source transient
     source_sig = generate_acoustic_source(req.signal_type, duration=0.06, fs=FS)
-    
-    # 3. Apply fractional delay for both channels
-    # Right channel receives earlier if theta > 0 (Right sector):
     delay_l = +delay_samples / 2.0
     delay_r = -delay_samples / 2.0
 
@@ -204,55 +343,44 @@ def simulate_acoustic_event(req: SimulationRequest):
         frac_delay = delay - int_delay
         shifted = np.roll(sig, int_delay)
         if abs(frac_delay) > 1e-4:
-            # Linear interpolation
             shifted = (1.0 - frac_delay) * shifted + frac_delay * np.roll(shifted, 1)
         return shifted
 
     ch_left = shift_signal(sig_padded, delay_l)[pad:pad + WINDOW_SIZE]
     ch_right = shift_signal(sig_padded, delay_r)[pad:pad + WINDOW_SIZE]
 
-    # 4. Room reverberation & early reflections simulation
     if req.rt60_s > 0.05:
-        refl_delay1 = int(0.003 * FS) # 3 ms reflection
-        refl_delay2 = int(0.007 * FS) # 7 ms reflection
+        refl_delay1 = int(0.003 * FS)
+        refl_delay2 = int(0.007 * FS)
         atten1 = math.exp(-6.91 * 0.003 / req.rt60_s) * 0.35
         atten2 = math.exp(-6.91 * 0.007 / req.rt60_s) * 0.20
-        
         ch_left += np.roll(ch_left, refl_delay1) * atten1 + np.roll(ch_left, refl_delay2) * atten2
         ch_right += np.roll(ch_right, refl_delay1) * atten1 + np.roll(ch_right, refl_delay2) * atten2
 
-    # 5. Add ambient acoustic noise based on SNR
     snr_linear = 10.0 ** (req.snr_db / 20.0)
     noise_power_l = np.std(ch_left) / max(snr_linear, 1e-3)
     noise_power_r = np.std(ch_right) / max(snr_linear, 1e-3)
     ch_left += np.random.normal(0, noise_power_l, WINDOW_SIZE)
     ch_right += np.random.normal(0, noise_power_r, WINDOW_SIZE)
 
-    # 6. Simulate 12-bit ADC quantization (0-4095, centered at 1550)
     bias = 1550.0
     scale = 1200.0
     adc_left = np.clip(bias + ch_left * scale, 0, 4095).astype(np.int16)
     adc_right = np.clip(bias + ch_right * scale, 0, 4095).astype(np.int16)
 
-    # 7. Zero-mean Normalized Cross-Correlation (DSP)
     t_dsp_start = time.perf_counter_ns()
     ncc_features = compute_ncc_dsp(adc_left, adc_right, max_lag=MAX_LAG)
     t_dsp_end = time.perf_counter_ns()
     dsp_latency_us = (t_dsp_end - t_dsp_start) / 1000.0
 
-    # Find peak lag
     peak_idx = int(np.argmax(ncc_features))
     peak_lag = peak_idx - MAX_LAG
     peak_ncc_val = float(ncc_features[peak_idx])
 
-    # 8. Run Quantized TinyML Inference
     pred_class, probs, tflm_latency_us = run_tflite_inference(ncc_features)
     pred_sector = SECTOR_NAMES[pred_class]
     confidence_pct = round(probs[pred_class] * 100.0, 1)
-
     t_total_ms = (time.perf_counter() - t0) * 1000.0
-
-    # Lags array [-15 ... +15]
     lags = list(range(-MAX_LAG, MAX_LAG + 1))
 
     return {
@@ -306,12 +434,52 @@ def simulate_acoustic_event(req: SimulationRequest):
         }
     }
 
+# ==============================================================================
+# HARDWARE WEBSOCKET & TRIGGER API
+# ==============================================================================
+@app.websocket("/ws/live-telemetry")
+async def websocket_telemetry_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    hardware_bridge.active_websockets.append(websocket)
+    try:
+        await websocket.send_text(json.dumps({
+            "type": "init",
+            "hardware_connected": hardware_bridge.is_connected,
+            "port": hardware_bridge.port,
+            "model_ready": interpreter is not None
+        }))
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+                if payload.get("action") == "trigger":
+                    key = payload.get("key", "c").lower()
+                    hardware_bridge.send_command(key)
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if websocket in hardware_bridge.active_websockets:
+            hardware_bridge.active_websockets.remove(websocket)
+
+@app.post("/api/hardware/trigger")
+def trigger_hardware_test(direction: str = Query("center", regex="^(left|center|right)$")):
+    """Sends test trigger character ('l', 'c', 'r') to the physical ESP32."""
+    key_map = {"left": "l", "center": "c", "right": "r"}
+    key = key_map.get(direction.lower(), "c")
+    success = hardware_bridge.send_command(key)
+    return {
+        "status": "sent" if success else "failed",
+        "key": key,
+        "hardware_connected": hardware_bridge.is_connected,
+        "port": hardware_bridge.port
+    }
+
 @app.get("/api/run-dsp-benchmark")
 def run_dsp_benchmark():
-    """Runs the compiled C++ DSP benchmark (test_dsp.exe) and returns the output."""
     if not os.path.exists(DSP_EXEC_PATH):
         raise HTTPException(status_code=404, detail="test_dsp.exe not found")
-
     try:
         res = subprocess.run([DSP_EXEC_PATH], capture_output=True, text=True, timeout=10)
         return {
@@ -325,7 +493,6 @@ def run_dsp_benchmark():
 
 @app.get("/api/system-status")
 def get_system_status():
-    """Returns workspace status, model details, and hardware compatibility."""
     ports = []
     try:
         import serial.tools.list_ports
@@ -335,6 +502,8 @@ def get_system_status():
 
     return {
         "status": "online",
+        "hardware_connected": hardware_bridge.is_connected,
+        "active_com_port": hardware_bridge.port if hardware_bridge.is_connected else None,
         "model_loaded": interpreter is not None,
         "model_path": MODEL_PATH,
         "model_size_bytes": os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0,
@@ -357,11 +526,9 @@ def download_presentation():
         return FileResponse(PPTX_PATH, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename="Acoustic_DoA_Internship_Presentation.pptx")
     raise HTTPException(status_code=404, detail="Presentation not found")
 
-# Mount report assets statically for image previews
 if os.path.exists(REPORT_ASSETS_DIR):
     app.mount("/report_assets", StaticFiles(directory=REPORT_ASSETS_DIR), name="report_assets")
 
-# Mount web UI static files
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -370,7 +537,7 @@ def serve_index():
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "Acoustic DoA TinyML API is running. UI is initializing..."}
+    return {"message": "Acoustic DoA TinyML API is running."}
 
 if __name__ == "__main__":
     import uvicorn
