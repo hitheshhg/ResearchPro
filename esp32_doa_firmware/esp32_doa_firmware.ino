@@ -1,6 +1,11 @@
 /**
  * ==============================================================================
- * Project: Real-Time Acoustic Direction of Arrival (DoA) TinyML System
+ * Project: Sound Direction Estimation using Machine Learning and TinyML
+ * Programme: Summer Research Internship Programme (SRIP 2025–26)
+ * Reference: Ref: 2026/NMAMIT/R&D/07
+ * Student: Hithesh H G (USN: NNM23CS084) | Branch: CSE
+ * Guide: Dr. Keerthana B Chigateri
+ * Institution: NMAM Institute of Technology, Nitte (Deemed to be University)
  * Platform: Dual-Core ESP32 (Tensilica Xtensa LX6 @ 240 MHz)
  * Sensors: 2x MAX9814 Electret Microphones with 10 cm baseline
  * High-Speed ADC: ESP-IDF adc1_get_raw (9 µs/sample) @ exact 16,000 Hz

@@ -24,8 +24,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Acoustic DoA • Precision Spatial Acoustic Radar",
-  description: "Minimalist 3D Spatial Acoustic Direction of Arrival and Sound Intensity Detection on ESP32",
+  title: "Sound Direction Estimation using Machine Learning and TinyML | Hithesh H G",
+  description:
+    "Sound Direction Estimation using Machine Learning and TinyML on ESP32 by Hithesh H G (NNM23CS084), Guided by Dr. Keerthana B Chigateri, Dept. of CSE, NMAM Institute of Technology, Nitte.",
 };
 
 export default function RootLayout({

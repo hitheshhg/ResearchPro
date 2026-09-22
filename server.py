@@ -32,8 +32,8 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import tensorflow as tf
 
 app = FastAPI(
-    title="ESP32 Acoustic DoA TinyML Research Platform",
-    description="Real-Time Acoustic Direction of Arrival Estimation with 3D Spatial Display & Hardware Telemetry",
+    title="Sound Direction Estimation using Machine Learning and TinyML",
+    description="Summer Research Internship Programme (SRIP 2025–26) • Student: Hithesh H G (NNM23CS084) • Guide: Dr. Keerthana B Chigateri • Dept. of CSE, NMAMIT Nitte",
     version="2.0.0"
 )
 

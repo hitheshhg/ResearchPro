@@ -44,17 +44,24 @@ export const LuxuryHud: FC<LuxuryHudProps> = ({ telemetry, onTrigger, onToggleMu
           <div className={`laser-indicator ${telemetry.connected ? "" : "searching"}`} />
           <div className="brand-meta">
             <span className="brand-title">
-              RESEARCHPRO // <strong>SPATIAL DoA</strong>
+              SOUND DIRECTION <strong>ESTIMATION</strong>
             </span>
             <span className="sub-meta">
-              {telemetry.connected ? `ESP32 • ${telemetry.port} @ 115200 BAUD` : "CONNECTING ESP32..."}
+              ML & TINYML // {telemetry.connected ? `ESP32 (${telemetry.port})` : "CONNECTING ESP32..."}
             </span>
           </div>
         </div>
 
-        <div className="hud-center-badge">
+        <div className="hud-center-badge" title="Summer Research Internship Programme (SRIP 2025-26)">
           <span className="chip-dot" />
-          <span className="chip-text">TINYML REAL-TIME INFERENCE</span>
+          <div className="center-badge-content">
+            <span className="center-badge-title">
+              HITHESH H G <span>• NNM23CS084</span>
+            </span>
+            <span className="center-badge-sub">
+              Guide: Dr. Keerthana B Chigateri • Dept. of CSE, NMAMIT Nitte
+            </span>
+          </div>
         </div>
 
         <div className="telemetry-capsule stats-capsule">
@@ -222,7 +229,7 @@ export const LuxuryHud: FC<LuxuryHudProps> = ({ telemetry, onTrigger, onToggleMu
         </div>
 
         <div className="hud-footnote">
-          <span>3D ACOUSTIC SPACE // DRAG TO ORBIT • SCROLL TO ZOOM • CLAP IN ROOM TO TRIGGER</span>
+          <span>SRIP 2025–26 • HITHESH H G (NNM23CS084) • GUIDE: DR. KEERTHANA B CHIGATERI • NMAMIT NITTE</span>
         </div>
       </footer>
     </div>

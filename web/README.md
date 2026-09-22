@@ -1,4 +1,10 @@
-# ResearchPro • Next.js & Three.js 3D Spatial Acoustic Radar
+# Sound Direction Estimation using Machine Learning and TinyML
+### Minimalist 3D Spatial Acoustic Radar Interface
+
+> **Author:** Hithesh H G (USN: `NNM23CS084`) — Dept. of Computer Science & Engineering (CSE)  
+> **Guide:** Dr. Keerthana B Chigateri  
+> **Institution:** NMAM Institute of Technology, Nitte (Deemed to be University)  
+> **Programme:** Summer Research Internship Programme (SRIP 2025–26)  
 
 A high-performance, minimalist 3D interface for real-time acoustic Direction of Arrival (DoA) estimation, powered by Next.js 16, Three.js, and UnrealBloomPass.
 

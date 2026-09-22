@@ -42,12 +42,12 @@ class NumberedCanvas(canvas.Canvas):
 
         # Header (pages > 1)
         if self._pageNumber > 1:
-            self.drawString(54, 11 * inch - 36, "IEEE RESEARCH INTERNSHIP TECHNICAL REPORT — EMBEDDED EDGE AI & DSP SYSTEMS")
+            self.drawString(54, 11 * inch - 36, "NITTE (DEEMED TO BE UNIVERSITY) • NMAMIT — SRIP 2025–26 TECHNICAL REPORT")
             self.line(54, 11 * inch - 40, 8.5 * inch - 54, 11 * inch - 40)
 
         # Footer (all pages)
         self.line(54, 45, 8.5 * inch - 54, 45)
-        self.drawString(54, 32, "CONFIDENTIAL — EDGE AI RESEARCH PROJECT DELIVERABLE")
+        self.drawString(54, 32, "STUDENT: HITHESH H G (NNM23CS084) | GUIDE: DR. KEERTHANA B CHIGATERI | DEPT. OF CSE")
         page_str = f"Page {self._pageNumber} of {page_count}"
         self.drawRightString(8.5 * inch - 54, 32, page_str)
         self.restoreState()
@@ -195,10 +195,10 @@ def build_pdf():
     story = []
 
     # Title & Metadata
-    story.append(Paragraph("Acoustic Direction of Arrival (DoA) Estimation on ESP32 Microcontrollers Using Dual MAX9814 Sensors and Quantized TinyML", title_style))
-    story.append(Paragraph("Research Internship Technical Report — Edge AI & Embedded Digital Signal Processing Systems", subtitle_style))
-    story.append(Paragraph("Embedded AI Research Engineering Group", author_style))
-    story.append(Paragraph("Department of Embedded Systems & Signal Processing • Academic & Industry Internship Technical Report", affiliation_style))
+    story.append(Paragraph("Sound Direction Estimation using Machine Learning and TinyML", title_style))
+    story.append(Paragraph("Summer Research Internship Programme (SRIP 2025–26) • Project Report (Ref: 2026/NMAMIT/R&D/07)", subtitle_style))
+    story.append(Paragraph("Hithesh H G (USN: NNM23CS084)", author_style))
+    story.append(Paragraph("Project Guide: Dr. Keerthana B Chigateri<br/>Department of Computer Science and Engineering (CSE)<br/>NMAM Institute of Technology, Nitte (Deemed to be University), Karkala, Karnataka", affiliation_style))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0D233A"), spaceAfter=10))
 
     # Abstract Box

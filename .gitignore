@@ -47,4 +47,8 @@ node_modules/
 .next/
 web/node_modules/
 web/.next/
+web/AGENTS.md
+web/CLAUDE.md
+AGENTS.md
+CLAUDE.md
 

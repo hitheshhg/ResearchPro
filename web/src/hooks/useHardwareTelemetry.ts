@@ -135,8 +135,7 @@ export function useHardwareTelemetry({ onAcousticTrigger }: UseTelemetryOptions 
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
         socketRef.current.send(JSON.stringify({ action: "trigger", key }));
       } else {
-        const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-        fetch(`http://${host}:8000/api/hardware/trigger?direction=${sector.toLowerCase()}`, {
+        fetch(`/api/hardware/trigger?direction=${sector.toLowerCase()}`, {
           method: "POST",
         }).catch(() => {});
       }

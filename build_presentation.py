@@ -32,7 +32,7 @@ def create_presentation():
     prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
 
-    def add_header(slide, title_text, category_text="RESEARCH INTERNSHIP PROJECT DEFENSE"):
+    def add_header(slide, title_text, category_text="NITTE NMAMIT • SRIP 2025–26 FINAL PROGRESS PRESENTATION"):
         # Top banner category
         cat_box = slide.shapes.add_textbox(Inches(0.8), Inches(0.4), Inches(11.7), Inches(0.35))
         tf_c = cat_box.text_frame
@@ -59,6 +59,14 @@ def create_presentation():
         line.fill.fore_color.rgb = COLOR_CYAN
         line.line.color.rgb = COLOR_CYAN
 
+        # Bottom Slide Footer
+        foot_box = slide.shapes.add_textbox(Inches(0.8), Inches(7.05), Inches(11.733), Inches(0.35))
+        tf_f = foot_box.text_frame
+        p_f = tf_f.paragraphs[0]
+        p_f.text = "Hithesh H G (NNM23CS084) | Guide: Dr. Keerthana B Chigateri | CSE, NMAMIT Nitte | Ref: 2026/NMAMIT/R&D/07"
+        p_f.font.size = Pt(8.5)
+        p_f.font.color.rgb = COLOR_TEXT_MUTED
+
     def add_card(slide, left, top, width, height, bg_color=COLOR_CARD_BG, border_color=COLOR_CARD_BORDER):
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
         card.fill.solid()
@@ -82,21 +90,21 @@ def create_presentation():
     tf1.word_wrap = True
     
     p0 = tf1.paragraphs[0]
-    p0.text = "RESEARCH INTERNSHIP FINAL PROJECT DEFENSE"
-    p0.font.size = Pt(13)
+    p0.text = "NITTE (DEEMED TO BE UNIVERSITY) • NMAM INSTITUTE OF TECHNOLOGY\nSUMMER RESEARCH INTERNSHIP PROGRAMME (SRIP 2025–26)"
+    p0.font.size = Pt(12)
     p0.font.bold = True
     p0.font.color.rgb = COLOR_CYAN
-    p0.space_after = Pt(14)
+    p0.space_after = Pt(12)
 
     p1 = tf1.add_paragraph()
-    p1.text = "Acoustic Direction of Arrival (DoA) Estimation\non ESP32 Using Dual Sensors & Quantized TinyML"
+    p1.text = "Sound Direction Estimation using\nMachine Learning and TinyML"
     p1.font.size = Pt(28)
     p1.font.bold = True
     p1.font.color.rgb = RGBColor(255, 255, 255)
-    p1.space_after = Pt(14)
+    p1.space_after = Pt(12)
 
     p2 = tf1.add_paragraph()
-    p2.text = "Ultra-Low-Power Embedded Edge AI • 10 cm Baseline • 31-Point Normalized Cross-Correlation"
+    p2.text = "Edge AI & Sub-Millisecond TinyML Direction of Arrival on ESP32 Microcontroller"
     p2.font.size = Pt(14)
     p2.font.color.rgb = RGBColor(200, 225, 245)
 
@@ -132,12 +140,18 @@ def create_presentation():
         pb2.alignment = PP_ALIGN.CENTER
 
     # Footer Metadata
-    f_box = s1.shapes.add_textbox(Inches(1.0), Inches(6.0), Inches(11.333), Inches(0.8))
+    f_box = s1.shapes.add_textbox(Inches(1.0), Inches(5.9), Inches(11.333), Inches(1.1))
     tff = f_box.text_frame
     pf = tff.paragraphs[0]
-    pf.text = "Author: Embedded AI & TinyML Research Group  |  Platform: ESP32 (Xtensa Dual-Core @ 240 MHz)  |  Target: MAX9814 Electret Array"
-    pf.font.size = Pt(11)
-    pf.font.color.rgb = RGBColor(160, 185, 210)
+    pf.text = "Student: Hithesh H G (USN: NNM23CS084)  |  Guide: Dr. Keerthana B Chigateri  |  Dept. of Computer Science & Engineering (CSE)"
+    pf.font.size = Pt(11.5)
+    pf.font.bold = True
+    pf.font.color.rgb = RGBColor(220, 235, 255)
+    
+    pf2 = tff.add_paragraph()
+    pf2.text = "NMAM Institute of Technology, Nitte (Deemed to be University)  •  Progress Presentation: 26 Sept 2026, 11:00 AM – 11:15 AM (LH211 APJ Block)"
+    pf2.font.size = Pt(10)
+    pf2.font.color.rgb = RGBColor(160, 185, 210)
 
     # ==========================================================================
     # SLIDE 2: MOTIVATION & PROBLEM FORMULATION

@@ -213,27 +213,49 @@ html, body {
 .hud-center-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(14, 20, 32, 0.45);
+  gap: 10px;
+  background: rgba(10, 16, 26, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border: 1px solid var(--border-subtle);
-  padding: 6px 14px;
+  padding: 6px 18px;
   border-radius: var(--radius-pill);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .chip-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--neon-cyan);
-  box-shadow: 0 0 8px var(--neon-cyan);
+  box-shadow: 0 0 10px var(--neon-cyan);
+  animation: laserPulse 2s infinite;
 }
 
-.chip-text {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  font-weight: 600;
+.center-badge-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.center-badge-title {
+  font-family: var(--font-hero);
+  font-size: 0.70rem;
+  font-weight: 700;
   letter-spacing: 1px;
+  color: var(--text-pure);
+}
+
+.center-badge-title span {
   color: var(--neon-cyan);
+}
+
+.center-badge-sub {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
 }
 
 .stats-capsule {

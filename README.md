@@ -1,4 +1,11 @@
-# ResearchPro: Real-Time Acoustic Direction of Arrival (DoA) TinyML Platform
+# Sound Direction Estimation using Machine Learning and TinyML
+
+> **Summer Research Internship Programme (SRIP 2025–26)**  
+> **Institution:** NMAM Institute of Technology, Nitte (Deemed to be University)  
+> **Circular Reference:** Ref: 2026/NMAMIT/R&D/07 (Dated: 10.09.2026)  
+> **Student / Intern:** **Hithesh H G** (USN: `NNM23CS084`) — Branch: Computer Science & Engineering (CSE)  
+> **Project Guide / Mentor:** **Dr. Keerthana B Chigateri**  
+> **Presentation Schedule:** 26 September 2026, 11:00 AM – 11:15 AM | Venue: LH211, 2nd Floor, APJ Block  
 
 An end-to-end edge-computing system for real-time acoustic Direction of Arrival (DoA) estimation using dual microphones, sub-millisecond Normalized Cross-Correlation (NCC) DSP, on-chip quantized int8 TinyML neural inference on ESP32, and an ultra-minimalist 3D spatial visualizer built with Next.js and Three.js.
 
